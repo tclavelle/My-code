@@ -1,0 +1,137 @@
+---
+output:
+  pdf_document: default
+  html_notebook: default
+---
+
+```{r data, echo=F, warning=F, message=FALSE}
+library(tidyverse)
+library(scales)
+library(mgcv)
+
+fao <- read_csv(file = '../../Google Drive/Project Data/fao-data/FoodSupply_LivestockFish_E_All_Data.csv')
+fish <- read_csv(file = '../../Google Drive/Project Data/fao-data/fao_capture_50to14_long.csv') %>%
+  ungroup()
+```
+
+```{r tidy, echo=FALSE, warning=FALSE, message=FALSE}
+# Filter out global totals of interest
+global <- fao %>%
+  filter(Area == 'World') %>%
+  filter(Item %in% c('Fish, Seafood', 'Bovine Meat', 'Mutton & Goat Meat', 'Pigmeat', 'Poultry Meat')) %>%
+  select(-ends_with('F')) %>%
+  gather(key = Year, value = Total, starts_with('Y')) %>%
+  mutate(Total = as.numeric(Total),
+         Year  = gsub('Y', replacement = '', Year)) %>%
+  select(-contains('Code'))
+
+# aggregate land sources
+land_sea <- global %>%
+  filter(Item != 'Fish, Seafood') %>%
+  group_by(Year, Element, Unit) %>%
+  summarize(Total = sum(Total, na.rm = T)) %>%
+  mutate(Item = 'Livestock') %>%
+  bind_rows(global %>%
+              filter(Item == 'Fish, Seafood') %>%
+              select(Year, Element, Item, Total))
+
+# Seafood as % of all food
+seafood_percs <- land_sea %>%
+  group_by(Year, Element) %>%
+  mutate(all_food = sum(Total, na.rm = T)) %>%
+  group_by(Year, Element, Item) %>%
+  mutate(perc_of_total = 100*(Total / all_food))
+```
+
+```{r meat, echo=FALSE, warning=FALSE, message=F, fig.height= 9, fig.width=7, fig.cap='Percent contribution to global food supply by the terrestrial livestock and marine fisheries/aquaculture sectors'}
+
+seafood_percs %>%
+  filter(Element %in% c('Food supply quantity (kg/capita/yr)',
+                        'Food supply quantity (tonnes)',
+                        'Protein supply quantity (g/capita/day)')) %>%
+  ungroup() %>%
+  mutate(Item = factor(Item, levels = c('Livestock', 'Fish, Seafood'))) %>%
+  ggplot(aes(x = Year, y = perc_of_total, fill = Item, group = Item)) +
+  geom_bar(stat = 'identity') +
+  labs(x = "Year",
+       y = 'Percent of Global Animal Food Supply') +
+  facet_wrap(~Element, scales = 'free_y', ncol = 1) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 90))
+
+```
+
+```{r meat2 , echo=FALSE, warning=FALSE, message=F, fig.height= 9, fig.width=7, fig.cap='Percent contribution to global food supply by the terrestrial livestock and marine fisheries/aquaculture sectors'}
+
+land_sea %>%
+  filter(Element %in% c('Food supply quantity (kg/capita/yr)',
+                        'Food supply quantity (tonnes)',
+                        'Protein supply quantity (g/capita/day)')) %>%
+  ungroup() %>%
+  mutate(Item = factor(Item, levels = c('Livestock', 'Fish, Seafood'))) %>%
+  ggplot(aes(x = Year, y = Total, fill = Item, group = Item)) +
+  geom_bar(stat = 'identity') +
+  labs(x = "Year",
+       y = '') +
+  scale_y_continuous(labels = comma) +
+  facet_wrap(~Element, scales = 'free_y', ncol = 1) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 90))
+
+```
+
+```{r meat3 , echo=FALSE, warning=FALSE, message=F, fig.height= 9, fig.width=7, fig.cap='Percent contribution to global food supply by the terrestrial livestock and marine fisheries/aquaculture sectors'}
+
+global %>%
+  filter(Element %in% c('Food supply quantity (kg/capita/yr)',
+                        'Food supply quantity (tonnes)',
+                        'Protein supply quantity (g/capita/day)')) %>%
+  ungroup() %>%
+  # mutate(Item = factor(Item, levels = c('Livestock', 'Fish, Seafood'))) %>%
+  ggplot(aes(x = Year, y = Total, color = Item, group = Item)) +
+  geom_line(stat = 'identity') +
+  labs(x = "Year",
+       y = '') +
+  scale_y_continuous(labels = comma) +
+  facet_wrap(~Element, scales = 'free_y', ncol = 1) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 90))
+
+```
+
+
+```{r asia, echo=FALSE, warning=FALSE, message=FALSE, fig.width=6, fig.height=5, fig.cap='Capture fisheries landings (MT) in Asian waters (FAO major fishing regions 57, 61, and 71) compared to the rest of the world. Trendlines are generalized additive models.'}
+fish$Region <- 'Rest of World'
+fish$Region[fish$`Fishing area (FAO major fishing area)_1` %in% c(61,71,57)] <- 'Asia'
+
+asia <- fish %>%
+  group_by(year, Region) %>%
+  summarize(catch = sum(quantity, na.rm = T))
+
+# equation to display on chart
+equation = function(x) {
+  lm_coef <- list(a = round(coef(x)[1], digits = 2),
+                  b = round(coef(x)[2], digits = 2),
+                  r2 = round(summary(x)$r.squared, digits = 2));
+  lm_eq <- substitute(italic(y) == a + b %.% italic(x)*","~~italic(R)^2~"="~r2,lm_coef)
+  as.character(as.expression(lm_eq));                 
+}
+
+# Linear models from 1990 to today
+fit1 <- lm(catch ~ year, data = subset(asia, year >1989 & Region == 'Rest of World'))
+fit2 <- lm(catch ~ year, data = subset(asia, year >1989 & Region == 'Asia'))
+
+
+ggplot(asia, aes(x = year, y = catch, color = Region)) +
+  geom_line() +
+  geom_smooth(show.legend = F) +
+  scale_y_continuous(labels = comma) +
+  scale_color_manual(values = c('blue', 'darkgreen')) +
+  labs(x = 'Year',
+       y = 'Marine capture landings (metric tons, MT)') +
+  theme_bw() +
+  theme(legend.key = element_blank())
+
+ggsave(filename = 'pnas_comment_chris.pdf', width = 5, height = 4, dpi = 600)
+write_csv(asia, path = 'pnas_comment_chris_data.csv')
+```
