@@ -1,91 +1,85 @@
 #------------------------------------------------------------------------------------------------------
-#  xml format (note: did not create a dataframe)
+#  Live Tracks Shiny App code
+#  By: Tyler Clavelle
 #------------------------------------------------------------------------------------------------------
-  ##comment: Libraries needed:
+
 library(httr)
 library(tidyverse)
 library(XML)
 library(xml2)
 library(RCurl)
+library(data.table)
+library(lubridate)
 
-# Function
-xmlToDF = function(doc, xpath, isXML = TRUE, usewhich = TRUE, verbose = TRUE) {
-  
-  if (!isXML) 
-    doc = xmlParse(doc)
-  #### get the records for that form
-  nodeset <- getNodeSet(doc, xpath)
-  
-  ## get the field names
-  var.names <- lapply(nodeset, names)
-  
-  ## get the total fields that are in any record
-  fields = unique(unlist(var.names))
-  
-  ## extract the values from all fields
-  dl = lapply(fields, function(x) {
-    if (verbose) 
-      print(paste0("  ", x))
-    xpathSApply(proc, paste0(xpath, "/", x), xmlValue)
-  })
-  
-  ## make logical matrix whether each record had that field
-  name.mat = t(sapply(var.names, function(x) fields %in% x))
-  df = data.frame(matrix(NA, nrow = nrow(name.mat), ncol = ncol(name.mat)))
-  names(df) = fields
-  
-  ## fill in that data.frame
-  for (icol in 1:ncol(name.mat)) {
-    rep.rows = name.mat[, icol]
-    if (usewhich) 
-      rep.rows = which(rep.rows)
-    df[rep.rows, icol] = dl[[icol]]
-  }
-  
-  return(df)
-}
-
-###
+### Phish artist id
 mbid <- 'e01646f2-2a04-450d-8bf2-0d993082e058'
 
-##comment: First page only with this link, adjust as necessary or loop for multiple
-xmlLocation <- paste('api.setlist.fm/rest/0.1/artist/',mbid,'/setlists.xml?p=1',sep='')
+pgs <- c(1:88)
 
-# read xml information from API
-phish <- read_xml(x = getURL(xmlLocation))
+all_shows <- lapply(pgs, FUN = function(c) {
+  
+  # First page only with this link, adjust as necessary or loop for multiple (176 pages for Phish)
+  xmlLocation <- paste('api.setlist.fm/rest/0.1/artist/',mbid,'/setlists.xml?p=', c ,sep='')
+  
+  xmlLocationPhish <- paste('api.setlist.fm/rest/0.1/artist/',mbid,'/setlists.xml?p=80' ,sep='')
+  phish2<-read_xml(x = getURL(xmlLocationPhish))
+  
+  
+  # read xml information from API
+  phish <- read_xml(x = getURL(xmlLocation))
+  
+  # extract all sets
+  sets <- xml_children(xml_find_all(phish, "//sets"))
+  
+  ## Tour date info
+  venue_info <- xml_find_all(phish, 'setlist/@id | setlist/@eventDate | //city/@name | //city/@state | //venue/@id | //venue/@name | //coords/@lat | //coords/@long') %>%
+    xml_text() %>%
+    matrix(ncol = 8, byrow = T) %>%
+    as.data.frame(stringsAsFactors = F) %>%
+    rename(date = V1,
+           show_id = V2,
+           venue_id = V3,
+           venue    = V4,
+           city     = V5,
+           state    = V6,
+           lat      = V7,
+           long     = V8)
+  
+  all_sets <- lapply(sets, FUN = function(x) {
+    # for(a in 1:length(sets)) {
+      # x <- sets[[a]]
+    # x = sets[[12]]
+    # get show id
+    show_id <- xml_find_all(x, '../../@id') %>% 
+      xml_text()
+    
+    # get set name
+    set_name <- xml_find_all(x, '@name' ) %>% 
+      xml_text()
+    
+    if(length(set_name)==0) {set_name <- 'non-set'}
+    
+    # get songs
+    songs <- xml_find_all(x, 'song/@name | song/info' ) %>% 
+      xml_text()
+    
+    # make data frame of set
+    set_df <- data_frame(show_id = rep(show_id, times = length(songs)),
+                         set     = rep(set_name, times = length(songs)),
+                         song    = songs)
+    # print(a)
+  }) %>%
+    bind_rows() %>%
+    left_join(venue_info)
 
-# extract all setlist records
-setlists <- xml_find_all(phish, "//setlist")
+  # store page results in master list
+  # all_shows[[a]] <- set_df
+  # print(a)
+})
 
+all <- bind_rows(all_shows) %>%
+  separate(date, into = c('day','month','year'), sep = '-')
+  
 
-# extract info about setlists to use to query songs
-sets <- xml_attrs(setlists) # attributes
-labs <- trimws(xml_attr(setlists, 'id'))
-
-xml_attrs(setlists[[1]])
-
-# This creates a list where each element is a list of all info for a given show
-shows <- as_list(phish)
-
-
-
-# extract all sets
-sets <- xml_find_all(phish, "//set") 
-
-
-xml_find_all(sets[[2]], '//song/@name') %>%
-  xml_text()
-
-xml_attrs(setlists)
-
-sets <- xml_find_all(phish, "//setlist") 
-
-xml_find_all(sets[[2]], '//') %>%
-  xml_text()
-
-
-
-
-
-
+write_csv(all, path = 'phish_beta.csv')
 
